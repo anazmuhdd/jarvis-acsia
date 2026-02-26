@@ -353,7 +353,9 @@ def generate_and_send_recap():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
+@app.get("/")
+def test():
+    return "Hello World"
 if __name__ == "__main__":
     import uvicorn
     # Allow running directly via python main.py
