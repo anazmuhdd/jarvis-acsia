@@ -268,6 +268,8 @@ async def generate_topics(profile: dict):
     except Exception as e:
         print(f"[LLM] Error: {e}")
         return {"queries": [f"{role} technology trends", "AI development", "engineering best practices"], "error": str(e)}
-
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the Jarvis ACSIA API"}
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
