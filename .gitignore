@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+.env
+
+# Token & Cache
+.graph_token_key
+.graph_token_cache.json
+recap_state.json
+
+# Node / React (admin-ui)
+admin-ui/node_modules/
+admin-ui/dist/
+admin-ui/.DS_Store
+
+# Logs
+*.log
