@@ -14,66 +14,20 @@ USER_ID = os.getenv("USER_ID", "")
 # Flag to use mock data for local testing without API permissions
 MOCK_MODE = os.getenv("MOCK_MODE", "false").lower() == "true"
 
-TOKEN_KEY_FILE = ".graph_token_key"
-TOKEN_CACHE_FILE = ".graph_token_cache.json"
-
-def _get_or_create_aes_key() -> bytes:
-    if os.path.exists(TOKEN_KEY_FILE):
-        with open(TOKEN_KEY_FILE, "rb") as f:
-            return f.read()
-    else:
-        key = AESGCM.generate_key(bit_length=256)
-        with open(TOKEN_KEY_FILE, "wb") as f:
-            f.write(key)
-        return key
-
-def _encrypt_token(token: str) -> str:
-    key = _get_or_create_aes_key()
-    aesgcm = AESGCM(key)
-    nonce = os.urandom(12)
-    # Encrypt token, add nonce at start, then encode to base64 string
-    ciphertext = aesgcm.encrypt(nonce, token.encode("utf-8"), None)
-    return base64.b64encode(nonce + ciphertext).decode("utf-8")
-
-def _decrypt_token(encrypted_b64: str) -> str:
-    key = _get_or_create_aes_key()
-    aesgcm = AESGCM(key)
-    encrypted_data = base64.b64decode(encrypted_b64)
-    nonce = encrypted_data[:12]
-    ciphertext = encrypted_data[12:]
-    return aesgcm.decrypt(nonce, ciphertext, None).decode("utf-8")
-
-def inject_raw_token(token: str):
-    """
-    Encrypts and caches a raw Graph API token (e.g. from Graph Explorer) for ~1 hour.
-    """
-    encrypted = _encrypt_token(token)
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=55)
-    
-    with open(TOKEN_CACHE_FILE, "w") as f:
-        json.dump({
-            "encrypted_token": encrypted,
-            "expires_at": expires_at.isoformat()
-        }, f)
+GRAPH_ACCESS_TOKEN = os.getenv("GRAPH_ACCESS_TOKEN", "")
 
 def get_access_token():
     """
-    Fetches the access token, first checking for an injected token, then falling back to Client Credentials.
+    Fetches the access token. 
+    1. Prioritizes GRAPH_ACCESS_TOKEN from .env (for manual overrides).
+    2. Falls back to Client Credentials flow.
     """
-    # 1. Check if we have a valid cached token
-    if os.path.exists(TOKEN_CACHE_FILE):
-        try:
-            with open(TOKEN_CACHE_FILE, "r") as f:
-                data = json.load(f)
-            expires_at = datetime.fromisoformat(data["expires_at"])
-            if datetime.now(timezone.utc) < expires_at:
-                return _decrypt_token(data["encrypted_token"])
-        except Exception as e:
-            print(f"Failed to load/decrypt cached token: {e}")
+    # 1. Check for manual token override
+    if GRAPH_ACCESS_TOKEN and GRAPH_ACCESS_TOKEN != "your_token_here":
+        return GRAPH_ACCESS_TOKEN
             
     # 2. Fall back to oauth flow
     url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
-    # ... (rest of get_access_token implementation remains the same)
     data = {
         "client_id": CLIENT_ID,
         "client_secret": CLIENT_SECRET,
@@ -120,9 +74,10 @@ def get_all_messages_for_url(url, headers):
             break
     return results
 
-def get_all_messages(token):
+def get_all_messages(token, start_time=None, end_time=None):
     """
     Gets all messages from the specified user's chats, teams, and channels.
+    If start_time and end_time are provided (as datetime objects), filters messages accordingly.
     """
     if MOCK_MODE:
         print("MOCK_MODE Enabled: Loading complex mock data from mock_chat_data.json...")
@@ -143,8 +98,13 @@ def get_all_messages(token):
                     minute=int(t_parts[1]), 
                     second=int(t_parts[2]), 
                     microsecond=0
-                )
+                ).replace(tzinfo=timezone.utc) # Ensure UTC
                 
+                # Filter mock data if range is provided
+                if start_time and end_time:
+                    if not (start_time <= target_time <= end_time):
+                        continue
+
                 mock_messages.append({
                     "sender": item["sender"],
                     "content": item["content"],
@@ -160,6 +120,30 @@ def get_all_messages(token):
     
     all_messages = []
     
+    # Common filter string for API optimization
+    filter_query = ""
+    if start_time and end_time:
+        # User feedback: createdDateTime doesn't support ge filter.
+        # lastModifiedDateTime only supports gt (greater than) and lt (less than) for chat messages.
+        # We adjust the range by 1 second to ensure we capture the full day with gt/lt.
+        api_start = start_time - timedelta(seconds=1)
+        api_end = end_time + timedelta(seconds=1)
+        
+        start_iso = api_start.strftime('%Y-%m-%dT%H:%M:%SZ')
+        end_iso = api_end.strftime('%Y-%m-%dT%H:%M:%SZ')
+        
+        filter_query = f"?$filter=lastModifiedDateTime gt {start_iso} and lastModifiedDateTime lt {end_iso}"
+    elif start_time:
+        api_start = start_time - timedelta(seconds=1)
+        start_iso = api_start.strftime('%Y-%m-%dT%H:%M:%SZ')
+        filter_query = f"?$filter=lastModifiedDateTime gt {start_iso}"
+    
+    def parse_time(t_str):
+        try:
+            return datetime.fromisoformat(t_str.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
     # 1. Get all 1-on-1 and group chats for the user
     chats_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/chats"
     chats = get_all_pages(chats_url, headers)
@@ -167,10 +151,20 @@ def get_all_messages(token):
     # Extract messages for each chat
     for chat in chats:
         chat_id = chat["id"]
-        msgs_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/chats/{chat_id}/messages"
+        msgs_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/chats/{chat_id}/messages{filter_query}"
         
         msgs = get_all_messages_for_url(msgs_url, headers)
         for msg in msgs:
+            created_at_str = msg.get("createdDateTime")
+            if not created_at_str:
+                continue
+                
+            created_at = parse_time(created_at_str)
+            # Precise client-side filtering by createdDateTime
+            if start_time and end_time:
+                if not created_at or not (start_time <= created_at <= end_time):
+                    continue
+
             body = msg.get("body") or {}
             content = body.get("content")
             if content:
@@ -180,7 +174,7 @@ def get_all_messages(token):
                 all_messages.append({
                     "sender": sender,
                     "content": content,
-                    "time": msg.get("createdDateTime", ""),
+                    "time": created_at_str,
                     "source": "Chat"
                 })
 
@@ -197,10 +191,20 @@ def get_all_messages(token):
         for channel in channels:
             # Extract messages for each channel
             channel_id = channel["id"]
-            msgs_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages"
+            msgs_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages{filter_query}"
             
             msgs = get_all_messages_for_url(msgs_url, headers)
             for msg in msgs:
+                created_at_str = msg.get("createdDateTime")
+                if not created_at_str:
+                    continue
+                    
+                created_at = parse_time(created_at_str)
+                # Precise client-side filtering
+                if start_time and end_time:
+                    if not created_at or not (start_time <= created_at <= end_time):
+                        continue
+
                 body = msg.get("body") or {}
                 content = body.get("content")
                 if content:
@@ -214,7 +218,7 @@ def get_all_messages(token):
                     all_messages.append({
                         "sender": sender,
                         "content": content,
-                        "time": msg.get("createdDateTime", ""),
+                        "time": created_at_str,
                         "source": f"Team: {team_name} - Channel: {channel_name}"
                     })
     
@@ -262,14 +266,9 @@ def send_message_to_user_chat(token, chat_id, message_html):
     """
     Sends the generated HTML formatted message to the specified chat.
     """
-    if MOCK_MODE:
-        print("\n--- MOCK MODE: Intercepted Outbound Message ---")
-        print(message_html)
-        print("-----------------------------------------------\n")
-        return {"id": "mock_message_id_111"}
-
+    
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    url = f"https://graph.microsoft.com/v1.0/chats/{chat_id}/messages"
+    url = f"https://graph.microsoft.com/v1.0/chats/19:3ecfc375-9918-4b2a-a9cf-2fd366b0ec38_9be5adb7-370d-44c9-9fc1-c3224d6a80d5@unq.gbl.spaces/messages"
     payload = {
         "body": {
             "contentType": "html",
@@ -326,6 +325,32 @@ def create_todo_task(token, list_id, title):
     resp = requests.post(tasks_url, headers=headers, json=payload)
     resp.raise_for_status()
     return resp.json()
+
+def get_todo_lists(token):
+    """
+    Fetches all Microsoft To Do lists for the user.
+    """
+    if MOCK_MODE:
+        return [{"id": "mock_todo_list_id_123", "displayName": "Tasks from Teams"}]
+        
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    lists_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/todo/lists"
+    return get_all_pages(lists_url, headers)
+
+def get_tasks_for_list(token, list_id):
+    """
+    Fetches pending (not completed) tasks from a specific Microsoft To Do list.
+    """
+    if MOCK_MODE:
+        return [
+            {"id": "mock_task_1", "title": "Buy milk", "status": "notStarted"},
+            {"id": "mock_task_2", "title": "Finish report", "status": "inProgress"}
+        ]
+        
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    # Filter for non-completed tasks
+    tasks_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/todo/lists/{list_id}/tasks?$filter=status ne 'completed'"
+    return get_all_pages(tasks_url, headers)
 
 def create_or_get_onenote_notebook(token, notebook_name="Teams Recaps"):
     """

@@ -36,8 +36,15 @@ def generate_recap_and_tasks(state: AgentState) -> dict:
             "pending_tasks": []
         }
     
+    import re
+    def clean_html(text):
+        if not text: return ""
+        # Remove HTML tags
+        clean = re.compile('<.*?>')
+        return re.sub(clean, '', text)
+
     # Format messages for the prompt
-    msg_str = "\n".join([f"[{m['time']}] [{m.get('source', 'Chat')}] {m['sender']}: {m['content']}" for m in messages])
+    msg_str = "\n".join([f"[{m['time']}] [{m.get('source', 'Chat')}] {m['sender']}: {clean_html(m['content'])}" for m in messages])
     
     parser = PydanticOutputParser(pydantic_object=RecapOutput)
     
