@@ -7,7 +7,7 @@ export function LoginCard() {
   const { instance } = useMsal();
 
   const handleLogin = () => {
-    instance.loginRedirect(loginRequest).catch(e => console.error(e));
+    instance.loginPopup(loginRequest).catch(e => console.error(e));
   };
 
   return (

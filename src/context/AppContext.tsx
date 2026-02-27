@@ -10,6 +10,12 @@ export interface TodoItem {
   done: boolean;
 }
 
+export interface TodoList {
+  id: string;
+  displayName: string;
+  wellknownListName: string;
+}
+
 export const INITIAL_PROFILE: UserProfile = {
   id: "",
   displayName: "Mohammed Anas A R",
@@ -30,6 +36,8 @@ interface AppContextValue {
   setApiError: (e: string | null) => void;
   todos: TodoItem[];
   setTodos: React.Dispatch<React.SetStateAction<TodoItem[]>>;
+  todoLists: TodoList[];
+  setTodoLists: React.Dispatch<React.SetStateAction<TodoList[]>>;
   selectedArticle: Article | null;
   setSelectedArticle: (a: Article | null) => void;
   userId: string;
@@ -50,6 +58,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
   const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [todoLists, setTodoLists] = useState<TodoList[]>([]);
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
   const [userId, setUserId] = useState("guest");
   const [aadObjectId, setAadObjectId] = useState<string | null>(null);
@@ -63,6 +72,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       loading, setLoading,
       apiError, setApiError,
       todos, setTodos,
+      todoLists, setTodoLists,
       selectedArticle, setSelectedArticle,
       userId, setUserId,
       aadObjectId, setAadObjectId,

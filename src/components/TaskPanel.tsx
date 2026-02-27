@@ -4,7 +4,7 @@ import { useAppContext } from "../context/AppContext";
 import { useTodos } from "../hooks/useTodos";
 
 export function TaskPanel() {
-  const { todos } = useAppContext();
+  const { todos, todoLists } = useAppContext();
   const { newTodoTitle, setNewTodoTitle, toggleTodo, deleteTodo, handleAddTodo } = useTodos();
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
@@ -13,16 +13,12 @@ export function TaskPanel() {
 
   // Separate tasks into default and grouped
   const defaultTasks = todos.filter(t => t.wellknownListName === "defaultList");
-  const otherTasks = todos.filter(t => t.wellknownListName !== "defaultList");
+  
+  // Use explicitly fetched lists instead of deriving from tasks to show empty lists
+  const otherLists = todoLists.filter(list => list.wellknownListName !== "defaultList");
 
-  const groupedTasks = otherTasks.reduce((acc, t) => {
-    if (!acc[t.listName]) acc[t.listName] = [];
-    acc[t.listName].push(t);
-    return acc;
-  }, {} as Record<string, typeof todos>);
-
-  const toggleGroup = (listName: string) => {
-    setExpandedGroups(prev => ({ ...prev, [listName]: !prev[listName] }));
+  const toggleGroup = (listId: string) => {
+    setExpandedGroups(prev => ({ ...prev, [listId]: !prev[listId] }));
   };
 
   const renderTask = (todo: typeof todos[0]) => (
@@ -81,12 +77,13 @@ export function TaskPanel() {
         </ul>
 
         {/* Grouped Tasks */}
-        {Object.entries(groupedTasks).map(([listName, tasks]) => {
-          const isExpanded = expandedGroups[listName];
+        {otherLists.map(list => {
+          const isExpanded = expandedGroups[list.id];
+          const tasks = todos.filter(t => t.listId === list.id);
           return (
-            <div key={listName} className="mt-2">
+            <div key={list.id} className="mt-2">
               <button 
-                onClick={() => toggleGroup(listName)}
+                onClick={() => toggleGroup(list.id)}
                 className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors group cursor-pointer"
               >
                 {isExpanded ? (
@@ -95,13 +92,13 @@ export function TaskPanel() {
                   <ChevronRight size={14} className="text-gray-400" />
                 )}
                 <Folder size={13} className="text-[#1a73e8] opacity-70" />
-                <span className="text-xs font-medium text-gray-600 truncate">{listName}</span>
+                <span className="text-xs font-medium text-gray-600 truncate">{list.displayName}</span>
                 <span className="text-[10px] text-gray-400 ml-auto bg-gray-100 px-1.5 py-0.5 rounded-full">
                   {tasks.length}
                 </span>
               </button>
               
-              {isExpanded && (
+              {isExpanded && tasks.length > 0 && (
                 <ul className="flex flex-col gap-0.5 pl-6 mt-1 border-l-2 border-gray-50 ml-3">
                   {tasks.map(renderTask)}
                 </ul>
@@ -110,7 +107,7 @@ export function TaskPanel() {
           );
         })}
 
-        {todos.length === 0 && (
+        {todos.length === 0 && todoLists.length === 0 && (
           <p className="text-xs text-gray-400 py-4 text-center">No tasks in Microsoft To-Do.</p>
         )}
       </div>

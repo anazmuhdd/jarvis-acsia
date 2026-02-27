@@ -14,6 +14,13 @@ export const msalConfig: Configuration = {
 
 export const msalInstance = new PublicClientApplication(msalConfig);
 
+// Initialize MSAL and handle any redirect tokens if we accidentally enter that flow
+msalInstance.initialize().then(() => {
+  msalInstance.handleRedirectPromise().catch(e => {
+    console.error("MSAL Redirect Error:", e);
+  });
+});
+
 export const loginRequest: RedirectRequest = {
   scopes: ["User.Read", "Tasks.ReadWrite", "openid", "profile", "offline_access"],
   prompt: "select_account",

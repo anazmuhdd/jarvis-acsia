@@ -1,5 +1,7 @@
 import { msalInstance, loginRequest } from "./msalConfig";
 
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export async function getAccessToken() {
   const accounts = msalInstance.getAllAccounts();
   if (accounts.length > 0) {
@@ -37,8 +39,11 @@ export async function getUserPhoto() {
       const blob = await response.blob();
       return URL.createObjectURL(blob);
     }
-  } catch (error) {
-    console.error("Failed to fetch user photo:", error);
+  } catch (error: any) {
+    // Only log if it's not a generic 404 (user hasn't set a photo)
+    if (!error?.message?.includes("404")) {
+      console.warn("Could not fetch user photo, using fallback.");
+    }
   }
   return "https://media.istockphoto.com/id/1175416174/photo/happy-middle-aged-man-laughing-crossing-hands-on-yellow-background.jpg?s=612x612&w=0&k=20&c=uNITBcImFcGbDAtuptkaPK5fER85TJ4IsN11cKKLc-c=";
 }
@@ -133,16 +138,23 @@ export async function getTasksForList(listId: string, listName: string, wellknow
 export async function getTodoItems() {
   try {
     const lists = await getTodoLists();
-    if (lists.length === 0) return [];
+    if (lists.length === 0) return { tasks: [], lists: [] };
     
     // Filter out flagged emails list
     const validLists = lists.filter((list) => list.wellknownListName !== "flaggedEmails");
     
-    const tasksPerList = await Promise.all(validLists.map((list) => getTasksForList(list.id, list.displayName, list.wellknownListName)));
-    return tasksPerList.flat();
+    // Fetch tasks per list sequentially with a small delay to avoid 429 Too Many Requests on Graph API
+    const tasksPerList = [];
+    for (const list of validLists) {
+      const tasks = await getTasksForList(list.id, list.displayName, list.wellknownListName);
+      tasksPerList.push(tasks);
+      await delay(150); // Small 150ms delay between fetches
+    }
+    
+    return { tasks: tasksPerList.flat(), lists: validLists };
   } catch (error) {
     console.error("Failed to fetch todo items:", error);
-    return [];
+    return { tasks: [], lists: [] };
   }
 }
 

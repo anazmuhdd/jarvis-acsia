@@ -10,7 +10,7 @@ import type { UserProfile } from "../services/api";
 export function useNewsData() {
   const { accounts } = useMsal();
   const {
-    setProfile, setNews, setLoading, setApiError, setTodos, setUserId, setAadObjectId, userId, profile,
+    setProfile, setNews, setLoading, setApiError, setTodos, setTodoLists, setUserId, setAadObjectId, userId, profile,
     setRecap, setRecapLoading,
   } = useAppContext();
 
@@ -70,7 +70,7 @@ export function useNewsData() {
   const loadUserData = useCallback(async () => {
     setLoading(true);
     try {
-      const [user, photo, remoteTodos] = await Promise.all([
+      const [user, photo, remoteTodoData] = await Promise.all([
         getUserProfile(), getUserPhoto(), getTodoItems(),
       ]);
       const newProfile: UserProfile = {
@@ -85,8 +85,8 @@ export function useNewsData() {
       setAadObjectId(user.id);
       const uid = deriveUserId(accounts[0]?.homeAccountId, newProfile.jobTitle, newProfile.department);
       setUserId(uid);
-      if (remoteTodos.length > 0) {
-        setTodos(remoteTodos.map((t: TodoTask) => ({ 
+      if (remoteTodoData && remoteTodoData.tasks) {
+        setTodos(remoteTodoData.tasks.map((t: TodoTask) => ({ 
           id: t.id, 
           listId: t.listId, 
           listName: t.listName,
@@ -94,6 +94,9 @@ export function useNewsData() {
           text: t.title, 
           done: t.status === "completed" 
         })));
+        if (remoteTodoData.lists) {
+          setTodoLists(remoteTodoData.lists);
+        }
       }
       // Parallel fetch news/topics and recap
       await Promise.all([
