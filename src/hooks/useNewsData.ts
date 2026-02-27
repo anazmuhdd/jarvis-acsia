@@ -86,7 +86,14 @@ export function useNewsData() {
       const uid = deriveUserId(accounts[0]?.homeAccountId, newProfile.jobTitle, newProfile.department);
       setUserId(uid);
       if (remoteTodos.length > 0) {
-        setTodos(remoteTodos.map((t: TodoTask) => ({ id: t.id, listId: t.listId, text: t.title, done: t.status === "completed" })));
+        setTodos(remoteTodos.map((t: TodoTask) => ({ 
+          id: t.id, 
+          listId: t.listId, 
+          listName: t.listName,
+          wellknownListName: t.wellknownListName,
+          text: t.title, 
+          done: t.status === "completed" 
+        })));
       }
       // Parallel fetch news/topics and recap
       await Promise.all([

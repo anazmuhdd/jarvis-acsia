@@ -46,6 +46,8 @@ export async function getUserPhoto() {
 export interface TodoTask {
   id: string;
   listId: string; // Injected for easy CRUD
+  listName: string; // Injected for grouping UI
+  wellknownListName: string; // Injected for grouping UI
   title: string;
   status: "notStarted" | "inProgress" | "completed" | "deferred" | "waitingOnOthers";
   dueDateTime?: { dateTime: string; timeZone: string };
@@ -56,6 +58,7 @@ export interface TodoTask {
 export interface TodoList {
   id: string;
   displayName: string;
+  wellknownListName: string;
 }
 
 export async function getTodoLists(): Promise<TodoList[]> {
@@ -73,7 +76,7 @@ export async function getTodoLists(): Promise<TodoList[]> {
   }
 }
 
-export async function getTasksForList(listId: string): Promise<TodoTask[]> {
+export async function getTasksForList(listId: string, listName: string, wellknownListName: string): Promise<TodoTask[]> {
   try {
     const token = await getAccessToken();
     const todayStart = new Date();
@@ -97,7 +100,9 @@ export async function getTasksForList(listId: string): Promise<TodoTask[]> {
 
     const mapTask = (t: any): TodoTask => ({
       ...t,
-      listId, // Inject the listId
+      listId,
+      listName,
+      wellknownListName
     });
 
     const relevantNotCompleted = allNotCompleted
@@ -129,7 +134,11 @@ export async function getTodoItems() {
   try {
     const lists = await getTodoLists();
     if (lists.length === 0) return [];
-    const tasksPerList = await Promise.all(lists.map((list) => getTasksForList(list.id)));
+    
+    // Filter out flagged emails list
+    const validLists = lists.filter((list) => list.wellknownListName !== "flaggedEmails");
+    
+    const tasksPerList = await Promise.all(validLists.map((list) => getTasksForList(list.id, list.displayName, list.wellknownListName)));
     return tasksPerList.flat();
   } catch (error) {
     console.error("Failed to fetch todo items:", error);

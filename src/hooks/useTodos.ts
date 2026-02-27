@@ -28,7 +28,14 @@ export function useTodos() {
       const defaultList = lists.find((l: any) => l.displayName === "Tasks") || lists[0];
       if (defaultList) {
         const newTask = await createTodoTask(defaultList.id, text);
-        setTodos(prev => [{ id: newTask.id, listId: defaultList.id, text: newTask.title, done: newTask.status === "completed" }, ...prev]);
+        setTodos(prev => [{ 
+          id: newTask.id, 
+          listId: defaultList.id, 
+          listName: defaultList.displayName,
+          wellknownListName: defaultList.wellknownListName,
+          text: newTask.title, 
+          done: newTask.status === "completed" 
+        }, ...prev]);
       }
     } catch (e) { console.error("Failed to add task:", e); }
   };

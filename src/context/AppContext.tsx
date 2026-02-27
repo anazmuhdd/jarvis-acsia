@@ -4,6 +4,8 @@ import type { Article, UserProfile } from "../services/api";
 export interface TodoItem {
   id: string;
   listId: string;
+  listName: string;
+  wellknownListName: string;
   text: string;
   done: boolean;
 }
