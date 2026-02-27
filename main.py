@@ -254,19 +254,23 @@ async def generate_topics(profile: dict):
         prompt = (
             f"Act as a professional intelligence analyst for a {role}. Your objective is to curate a highly "
             "informative, engaging, and learnable news feed that keeps this professional at the absolute "
-            "forefront of their industry. Generate a generous list of 15 precise, high-quality Google News search queries.\n\n"
+            "forefront of their industry. Generate a generous list of 20 precise, high-quality Google News search queries.\n\n"
+            "CRITICAL CONTEXT: Our company operates in the AUTOMOTIVE industry. You MUST include queries related to:\n"
+            "- Emerging trends in Automotive and AI-driven automotive technologies.\n"
+            f"- How a {role} operates, innovates, or builds organizations within the Automotive industry.\n"
+            "- Building and maintaining software/systems/organizations for automotive.\n\n"
             "The queries MUST include specific patterns such as:\n"
             f"1. '{role} news latest' (Current industry events)\n"
             f"2. '{role} tools and frameworks 2025' (New technology adoption)\n"
-            f"3. 'Technical deep dive into {role} core principles'\n"
+            f"3. 'Technical deep dive into {role} principles in Automotive'\n"
             f"4. 'Latest {role} professional trends 2024-2025'\n"
-            f"5. 'Innovative {role} case studies and breakthroughs'\n\n"
+            f"5. 'Innovative {role} case studies and breakthroughs in Automotive AI'\n\n"
             "Goal: Create a feed that is a 'learning experience' and keeps them updated on tools, news, and shifts.\n\n"
             "Rules:\n"
             "- No job search, recruitment, or career-advice related queries.\n"
             "- Return as a simple comma-separated list of strings.\n"
             "- Provide NO conversational filler, NO numbering, and NO markdown formatting.\n"
-            "- Total count: Exactly 15 queries."
+            "- Total count: Exactly 20 queries."
         )
 
         response = await client_nvidia.chat.completions.create(
