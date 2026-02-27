@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+import msal
 import base64
 from datetime import datetime, timedelta, timezone
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -16,27 +17,48 @@ MOCK_MODE = os.getenv("MOCK_MODE", "false").lower() == "true"
 
 GRAPH_ACCESS_TOKEN = os.getenv("GRAPH_ACCESS_TOKEN", "")
 
+# MSAL ConfidentialClientApplication for automatic token management.
+# It caches the token in memory and automatically fetches a new one when it expires.
+_msal_app = None
+
+def _get_msal_app():
+    """Initializes and returns the MSAL ConfidentialClientApplication (singleton)."""
+    global _msal_app
+    if _msal_app is None:
+        authority = f"https://login.microsoftonline.com/{TENANT_ID}"
+        _msal_app = msal.ConfidentialClientApplication(
+            client_id=CLIENT_ID,
+            client_credential=CLIENT_SECRET,
+            authority=authority,
+        )
+    return _msal_app
+
 def get_access_token():
     """
-    Fetches the access token. 
-    1. Prioritizes GRAPH_ACCESS_TOKEN from .env (for manual overrides).
-    2. Falls back to Client Credentials flow.
+    Fetches the access token.
+    1. Prioritizes GRAPH_ACCESS_TOKEN from .env (for manual overrides / delegated tokens).
+    2. Falls back to MSAL Client Credentials flow with automatic in-memory caching.
     """
-    # 1. Check for manual token override
+    # 1. Check for manual token override (e.g. a delegated Graph Explorer token)
     if GRAPH_ACCESS_TOKEN and GRAPH_ACCESS_TOKEN != "your_token_here":
         return GRAPH_ACCESS_TOKEN
-            
-    # 2. Fall back to oauth flow
-    url = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
-    data = {
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "scope": "https://graph.microsoft.com/.default",
-        "grant_type": "client_credentials"
-    }
-    response = requests.post(url, data=data)
-    response.raise_for_status()
-    return response.json()["access_token"]
+
+    # 2. Use MSAL for automatic, cached, app-only token acquisition
+    app = _get_msal_app()
+    scopes = ["https://graph.microsoft.com/.default"]
+    
+    # Try cache first
+    result = app.acquire_token_silent(scopes, account=None)
+    
+    if not result:
+        # Cache miss — fetch a new token from Azure AD
+        print("[MSAL] No token in cache, fetching a new one from Azure AD...")
+        result = app.acquire_token_for_client(scopes=scopes)
+    
+    if "access_token" in result:
+        return result["access_token"]
+    
+    raise Exception(f"[MSAL] Failed to acquire token: {result.get('error_description', result)}")
 
 def get_all_pages(url, headers):
     """Helper function to handle pagination for Graph API requests."""
@@ -192,7 +214,9 @@ def get_all_messages(token, start_time=None, end_time=None, user_id=None):
         for channel in channels:
             # Extract messages for each channel
             channel_id = channel["id"]
-            msgs_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages{filter_query}"
+            # NOTE: The Graph API does NOT support $filter on channel messages.
+            # Date filtering is handled client-side below.
+            msgs_url = f"https://graph.microsoft.com/v1.0/teams/{team_id}/channels/{channel_id}/messages"
             
             msgs = get_all_messages_for_url(msgs_url, headers)
             for msg in msgs:
@@ -227,41 +251,65 @@ def get_all_messages(token, start_time=None, end_time=None, user_id=None):
     all_messages.sort(key=lambda x: x["time"])
     return all_messages
 
+BOT_USER_ID = os.getenv("BOT_USER_ID", "")
+
 def create_or_get_direct_chat(token, user_id=None):
     """
     Creates a 1-on-1 chat with the user so the bot can send direct messages.
+
+    Graph API requires BOTH members to be listed when creating a oneOnOne chat.
+    Set BOT_USER_ID in .env to the Object ID of the service principal / user
+    that the app authenticates as (found in Azure AD > Enterprise Applications).
     """
     target_user_id = user_id or USER_ID
     if MOCK_MODE:
         return f"mock_chat_id_{target_user_id}"
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    # --- Step 1: Try to find an existing 1-on-1 chat first ---
+    chats_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/chats?$filter=chatType eq 'oneOnOne'"
+    chats_resp = requests.get(chats_url, headers=headers)
+    if chats_resp.status_code == 200:
+        chats = chats_resp.json().get("value", [])
+        if chats:
+            print(f"[Graph] Found existing 1-on-1 chat: {chats[0]['id']}")
+            return chats[0]["id"]
+
+    # --- Step 2: Create a new 1-on-1 chat ---
+    # Graph API requires both participants listed in members.
+    members = [
+        {
+            "@odata.type": "#microsoft.graph.aadUserConversationMember",
+            "roles": ["owner"],
+            "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{target_user_id}')"
+        }
+    ]
+    # Include the bot/app user as the second member if BOT_USER_ID is configured
+    if BOT_USER_ID and BOT_USER_ID != target_user_id:
+        members.append({
+            "@odata.type": "#microsoft.graph.aadUserConversationMember",
+            "roles": ["owner"],
+            "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{BOT_USER_ID}')"
+        })
+
+    payload = {"chatType": "oneOnOne", "members": members}
     url = "https://graph.microsoft.com/v1.0/chats"
-    
-    payload = {
-        "chatType": "oneOnOne",
-        "members": [
-            {
-                "@odata.type": "#microsoft.graph.aadUserConversationMember",
-                "roles": ["owner"],
-                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{target_user_id}')"
-            }
-        ]
-    }
-    
     create_resp = requests.post(url, headers=headers, json=payload)
+
     if create_resp.status_code == 201:
-        return create_resp.json()["id"]
-    elif create_resp.status_code == 400:
-        # Fallback to fetching existing 1-on-1 chats
-        chats_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/chats?$filter=chatType eq 'oneOnOne'"
-        chats_resp = requests.get(chats_url, headers=headers)
-        if chats_resp.status_code == 200:
-            chats = chats_resp.json().get("value", [])
-            for chat in chats:
-                return chat["id"]
-                
-    create_resp.raise_for_status()
+        chat_id = create_resp.json()["id"]
+        print(f"[Graph] Created new 1-on-1 chat: {chat_id}")
+        return chat_id
+
+    # Surface the actual Graph API error for easier debugging
+    try:
+        err_detail = create_resp.json().get("error", {})
+        err_msg = f"{err_detail.get('code', create_resp.status_code)}: {err_detail.get('message', create_resp.text)}"
+    except Exception:
+        err_msg = create_resp.text
+
+    raise Exception(f"[Graph] Failed to create/find 1-on-1 chat ({create_resp.status_code}): {err_msg}")
     
 
 def send_message_to_user_chat(token, chat_id, message_html):

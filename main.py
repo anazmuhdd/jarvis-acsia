@@ -88,6 +88,30 @@ def save_current_recap(recap: str, last_recap_at: str = None, user_id: str = Non
     with open(state_file, "w") as f:
         json.dump(data, f)
 
+# --- Web Recap Cache (per-user, per-day) ---
+
+def _web_cache_file(user_id: str) -> str:
+    return f"web_recap_cache_{user_id}.json"
+
+def load_web_recap_cache(user_id: str, date_str: str) -> dict | None:
+    """Returns cached recap_details if a recap for `date_str` already exists, else None."""
+    cache_file = _web_cache_file(user_id)
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r") as f:
+                data = json.load(f)
+            if data.get("date") == date_str:
+                return data.get("recap_details")
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return None
+
+def save_web_recap_cache(user_id: str, date_str: str, recap_details: dict):
+    """Persists the recap for `date_str` so subsequent calls return it immediately."""
+    cache_file = _web_cache_file(user_id)
+    with open(cache_file, "w") as f:
+        json.dump({"date": date_str, "recap_details": recap_details}, f)
+
 def perform_daily_recap() -> None:
     """The core daily recap workflow (can be run in the background)."""
     print(f"[{datetime.now()}] Starting daily recap workflow...")
@@ -278,7 +302,7 @@ def generate_and_send_recap():
     """Run the AI Recap generation flow AND send the results via Teams for YESTERDAY (Local Time) for DEFAULT USER."""
     return run_recap_flow_internal(None, yesterday_only=True)
 
-def run_recap_flow_internal(user_id: str = None, start_time: datetime = None, end_time: datetime = None, yesterday_only: bool = False):
+def run_recap_flow_internal(user_id: str = None, start_time: datetime = None, end_time: datetime = None, yesterday_only: bool = False, send_to_teams: bool = True, update_todo: bool = True):
     """Internal helper to run the recap flow for any user and any time range."""
     try:
         # 1. Determine time range if not provided
@@ -323,36 +347,39 @@ def run_recap_flow_internal(user_id: str = None, start_time: datetime = None, en
         save_current_recap(current_recap, last_recap_at=end_utc.isoformat().replace("+00:00", "Z"), user_id=user_id)
         
         # 6. Integrations
-        todo_list_id = create_or_get_todo_list(token, user_id=user_id)
-        for task_title in ai_extracted_tasks:
-            try:
-                create_todo_task(token, todo_list_id, task_title, user_id=user_id)
-            except Exception: pass
-        
         final_pending_tasks = list(ai_extracted_tasks)
-        try:
-            actual_tasks = get_tasks_for_list(token, todo_list_id, user_id=user_id)
-            fetched_tasks = [t["title"] for t in actual_tasks]
-            for t in fetched_tasks:
-                if t not in final_pending_tasks:
-                    final_pending_tasks.append(t)
-        except Exception: pass
+        if update_todo:
+            todo_list_id = create_or_get_todo_list(token, user_id=user_id)
+            for task_title in ai_extracted_tasks:
+                try:
+                    create_todo_task(token, todo_list_id, task_title, user_id=user_id)
+                except Exception: pass
+
+            try:
+                actual_tasks = get_tasks_for_list(token, todo_list_id, user_id=user_id)
+                fetched_tasks = [t["title"] for t in actual_tasks]
+                for t in fetched_tasks:
+                    if t not in final_pending_tasks:
+                        final_pending_tasks.append(t)
+            except Exception: pass
 
         tasks_html = "".join([f"<li>{task}</li>" for task in final_pending_tasks])
         if not tasks_html: tasks_html = "<li>No pending tasks.</li>"
         message_html = f"<h3>Recap</h3><p>{current_recap}</p><h3>To-Do List</h3><ul>{tasks_html}</ul>"
         
-        chat_id = create_or_get_direct_chat(token, user_id=user_id)
-        send_resp = send_message_to_user_chat(token, chat_id, message_html)
-                    
-        # OneNote
-        current_date_str = datetime.now().strftime("%Y-%m-%d")
-        try:
-            notebook_id = create_or_get_onenote_notebook(token, "Teams Recaps", user_id=user_id)
-            section_id = create_onenote_section(token, notebook_id, current_date_str, user_id=user_id)
-            create_onenote_page(token, section_id, message_html, title=f"Recap for {current_date_str}", user_id=user_id)
-        except Exception: pass
-        
+        send_resp = None
+        if send_to_teams:
+            chat_id = create_or_get_direct_chat(token, user_id=user_id)
+            send_resp = send_message_to_user_chat(token, chat_id, message_html)
+
+            # OneNote
+            current_date_str = datetime.now().strftime("%Y-%m-%d")
+            try:
+                notebook_id = create_or_get_onenote_notebook(token, "Teams Recaps", user_id=user_id)
+                section_id = create_onenote_section(token, notebook_id, current_date_str, user_id=user_id)
+                create_onenote_page(token, section_id, message_html, title=f"Recap for {current_date_str}", user_id=user_id)
+            except Exception: pass
+
         return {
             "status": "success",
             "message": "Recap processed successfully.",
@@ -390,7 +417,29 @@ class WebRecapRequest(BaseModel):
 
 @app.post("/api/web/recap/generate")
 def web_generate_recap(req: WebRecapRequest):
-    return run_recap_flow_internal(user_id=req.user_id, yesterday_only=True)
+    # Yesterday's local date is the cache key (one recap per user per day)
+    yesterday_date = (datetime.now().astimezone() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # Return instantly if a recap for this user+date was already generated
+    cached = load_web_recap_cache(req.user_id, yesterday_date)
+    if cached:
+        return {
+            "status": "success",
+            "message": "Recap retrieved from cache.",
+            "recap_details": cached,
+            "teams_response": None,
+            "cached": True,
+        }
+
+    # Cache miss — run the full generation (no Teams send, no To-Do update)
+    result = run_recap_flow_internal(
+        user_id=req.user_id,
+        yesterday_only=True,
+        send_to_teams=False,
+        update_todo=False,
+    )
+    save_web_recap_cache(req.user_id, yesterday_date, result["recap_details"])
+    return result
 
 @app.post("/api/web/recap/generate-all")
 def web_generate_all_recap(req: WebRecapRequest):
@@ -414,4 +463,4 @@ def test():
 if __name__ == "__main__":
     import uvicorn
     # Allow running directly via python main.py
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
