@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useAppContext, type TodoItem } from "../context/AppContext";
+import { useAppContext } from "../context/AppContext";
 
 export function useTodos() {
   const { todos, setTodos } = useAppContext();
