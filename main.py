@@ -1,6 +1,7 @@
 import os
 import gc
 import httpx
+import uvicorn
 import asyncio
 import re
 import json
@@ -15,7 +16,6 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from selectolax.parser import HTMLParser
 from urllib.parse import quote, urlparse
-
 load_dotenv()
 
 # Use logging instead of print to avoid buffering memory
