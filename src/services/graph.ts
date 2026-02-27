@@ -84,10 +84,6 @@ export async function getTodoLists(): Promise<TodoList[]> {
 export async function getTasksForList(listId: string, listName: string, wellknownListName: string): Promise<TodoTask[]> {
   try {
     const token = await getAccessToken();
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setUTCHours(23, 59, 59, 999);
 
     const notCompletedUrl = `https://graph.microsoft.com/v1.0/me/todo/lists/${listId}/tasks?$filter=status ne 'completed'&$orderby=createdDateTime asc`;
     const completedUrl = `https://graph.microsoft.com/v1.0/me/todo/lists/${listId}/tasks?$filter=status eq 'completed'&$orderby=lastModifiedDateTime desc&$top=20`;
@@ -110,23 +106,8 @@ export async function getTasksForList(listId: string, listName: string, wellknow
       wellknownListName
     });
 
-    const relevantNotCompleted = allNotCompleted
-      .map(mapTask)
-      .filter((task) => {
-        if (!task.dueDateTime) {
-          const created = new Date(task.createdDateTime);
-          return created <= todayEnd;
-        }
-        const due = new Date(task.dueDateTime.dateTime + "Z");
-        return due <= todayEnd;
-      });
-
-    const completedToday = allCompleted
-      .map(mapTask)
-      .filter((task) => {
-        const modified = new Date(task.createdDateTime);
-        return modified >= todayStart && modified <= todayEnd;
-      });
+    const relevantNotCompleted = allNotCompleted.map(mapTask);
+    const completedToday = allCompleted.map(mapTask);
 
     return [...relevantNotCompleted, ...completedToday];
   } catch (error) {
