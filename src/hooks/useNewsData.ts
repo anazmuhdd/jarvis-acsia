@@ -28,7 +28,7 @@ export function useNewsData() {
     }
   }, []);
 
-  const generateTopicsAndFetch = useCallback(async (targetProfile: UserProfile, uid?: string) => {
+  const generateTopicsAndFetch = useCallback(async (targetProfile: UserProfile | null, uid?: string) => {
     const effectiveUid = uid ?? userId;
     const cached = getCachedNews(effectiveUid);
     if (cached && cached.articles.length > 0) {
@@ -39,9 +39,10 @@ export function useNewsData() {
     setLoading(true);
     setApiError(null);
     try {
-      const topics = await apiService.generateTopics({ jobTitle: targetProfile.jobTitle, department: targetProfile.department });
+      const requestProfile = targetProfile || INITIAL_PROFILE;
+      const topics = await apiService.generateTopics({ jobTitle: requestProfile.jobTitle, department: requestProfile.department });
       if (topics.length > 0) {
-        const articles = await fetchNews(topics.join(","), targetProfile.jobTitle);
+        const articles = await fetchNews(topics.join(","), requestProfile.jobTitle);
         if (articles.length > 0) {
           setNews(articles);
           setCachedNews(effectiveUid, articles, topics);
@@ -114,7 +115,7 @@ export function useNewsData() {
     clearCachedNews(userId);
     await Promise.all([
       generateTopicsAndFetch(profile, userId),
-      profile.id ? fetchRecap(profile.id) : Promise.resolve()
+      profile?.id ? fetchRecap(profile.id) : Promise.resolve()
     ]);
   }, [userId, profile, generateTopicsAndFetch, fetchRecap]);
 

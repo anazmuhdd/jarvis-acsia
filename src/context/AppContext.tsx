@@ -26,8 +26,8 @@ export const INITIAL_PROFILE: UserProfile = {
 };
 
 interface AppContextValue {
-  profile: UserProfile;
-  setProfile: (p: UserProfile) => void;
+  profile: UserProfile | null;
+  setProfile: (p: UserProfile | null) => void;
   news: Article[];
   setNews: (a: Article[]) => void;
   loading: boolean;
@@ -53,7 +53,7 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [profile, setProfile] = useState<UserProfile>(INITIAL_PROFILE);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [news, setNews] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);

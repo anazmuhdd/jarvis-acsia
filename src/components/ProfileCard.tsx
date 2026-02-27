@@ -16,15 +16,29 @@ export function ProfileCard() {
     <div className="py-2">
       {/* Profile row */}
       <div className="flex items-center gap-4 mb-3">
-        <div className="w-10 h-10 rounded-full overflow-hidden shrink-0 ring-4 ring-gray-50 shadow-sm">
-          <img src={profile.photoUrl} alt={profile.displayName} className="w-full h-full object-cover" />
-        </div>
-        <div>
-          <p className="font-bold text-[1.1rem] text-gray-900 leading-tight">{profile.displayName}</p>
-          <p className="flex items-center gap-1.5 text-xs text-gray-500 mt-1">
-            <Briefcase size={12} className="text-[#1a73e8]" /> {profile.department}
-          </p>
-        </div>
+        {!profile ? (
+          <>
+            <div className="w-10 h-10 rounded-full shrink-0 ring-4 ring-gray-50 shadow-sm bg-gray-50 flex items-center justify-center">
+              <Loader2 size={16} className="text-gray-400 animate-spin" />
+            </div>
+            <div className="flex flex-col flex-1 gap-2 pt-1">
+              <div className="h-4 bg-gray-100 rounded w-32 animate-pulse"></div>
+              <div className="h-3 bg-gray-50 rounded w-20 animate-pulse"></div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="w-10 h-10 rounded-full overflow-hidden shrink-0 ring-4 ring-gray-50 shadow-sm">
+              <img src={profile.photoUrl} alt={profile.displayName} className="w-full h-full object-cover" />
+            </div>
+            <div>
+              <p className="font-bold text-[1.1rem] text-gray-900 leading-tight">{profile.displayName}</p>
+              <p className="flex items-center gap-1.5 text-xs text-gray-500 mt-1">
+                <Briefcase size={12} className="text-[#1a73e8]" /> {profile.department}
+              </p>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Live clock */}
