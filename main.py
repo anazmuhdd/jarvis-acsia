@@ -1,4 +1,5 @@
 import os
+import gc
 import httpx
 import uvicorn
 import asyncio
@@ -6,9 +7,10 @@ import re
 import base64
 import json
 import xml.etree.ElementTree as ET
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import List, Optional
@@ -21,6 +23,14 @@ load_dotenv()
 
 app = FastAPI(title="Pulse AI - Intelligence Backend")
 
+# --- Memory cleanup middleware ---
+class MemoryCleanupMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        gc.collect()  # Force garbage collection after every request
+        return response
+
+app.add_middleware(MemoryCleanupMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -40,7 +50,8 @@ ASYNC_CLIENT_OPTIONS = {
     "verify": False,
     "timeout": 15.0,
     "follow_redirects": True,
-    "headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"}
+    "headers": {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"},
+    "limits": httpx.Limits(max_connections=10, max_keepalive_connections=5),  # Limit connection pool
 }
 
 async def decode_google_news_url_async(url: str) -> str:
@@ -130,20 +141,26 @@ async def get_article_image(google_url: str, client: httpx.AsyncClient) -> dict:
         
         soup = BeautifulSoup(response.text, 'html.parser')
         GOOGLE_DOMAINS = ["news.google.com", "gstatic.com", "googleusercontent.com"]
+        result = {"url": final_url, "image": None}
 
         og_image = soup.find("meta", attrs={"property": "og:image"})
         if og_image and og_image.get("content"):
             img = og_image["content"]
             if not any(d in img for d in GOOGLE_DOMAINS):
-                return {"url": final_url, "image": img}
+                result["image"] = img
+                del soup  # Free memory immediately
+                return result
         
         twitter_image = soup.find("meta", attrs={"name": "twitter:image"})
         if twitter_image and twitter_image.get("content"):
             img = twitter_image["content"]
             if not any(d in img for d in GOOGLE_DOMAINS):
-                return {"url": final_url, "image": img}
+                result["image"] = img
+                del soup  # Free memory immediately
+                return result
             
-        return {"url": final_url, "image": None}
+        del soup  # Free memory immediately
+        return result
     except Exception as e:
         print(f"[Image] Error for {final_url}: {e}")
         return {"url": final_url, "image": None}
@@ -218,9 +235,14 @@ async def get_news(q: str = "technology", role: Optional[str] = None):
                     return datetime.min
 
             unique_articles.sort(key=parse_date, reverse=True)
-            return {"articles": unique_articles}
+            result = {"articles": unique_articles}
+        
+        # Force cleanup of all large objects after the client context exits
+        gc.collect()
+        return result
             
     except Exception as e:
+        gc.collect()
         raise HTTPException(status_code=502, detail=str(e))
 
 @app.post("/api/generate-topics")
@@ -264,9 +286,11 @@ async def generate_topics(profile: dict):
             if clean_q and len(clean_q) > 3:
                 queries.append(clean_q) 
         print(f"Queries: {queries}")
+        gc.collect()
         return {"queries": queries}
     except Exception as e:
         print(f"[LLM] Error: {e}")
+        gc.collect()
         return {"queries": [f"{role} technology trends", "AI development", "engineering best practices"], "error": str(e)}
 @app.get("/")
 async def root():
