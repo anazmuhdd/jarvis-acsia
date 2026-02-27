@@ -33,6 +33,24 @@ def _get_msal_app():
         )
     return _msal_app
 
+def get_current_user_id(token: str) -> str:
+    """
+    Calls GET /me to dynamically resolve the Object ID of the user who owns
+    the current access token. This is required when using delegated (user)
+    tokens so that the user_id always matches the token's identity.
+    """
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get("https://graph.microsoft.com/v1.0/me", headers=headers)
+    if resp.status_code == 200:
+        user_id = resp.json().get("id")
+        if user_id:
+            print(f"[Graph /me] Resolved user ID: {user_id}")
+            return user_id
+    # Fallback to env var if /me fails (e.g. app-only token)
+    print(f"[Graph /me] Could not resolve user ID from token ({resp.status_code}), falling back to USER_ID env var.")
+    return USER_ID
+
+
 def get_access_token():
     """
     Fetches the access token.
@@ -101,7 +119,7 @@ def get_all_messages(token, start_time=None, end_time=None, user_id=None):
     Gets all messages from the specified user's chats, teams, and channels.
     If start_time and end_time are provided (as datetime objects), filters messages accordingly.
     """
-    target_user_id = user_id or USER_ID
+    target_user_id = user_id or get_current_user_id(token)
     if MOCK_MODE:
         print(f"MOCK_MODE Enabled for user {target_user_id}: Loading complex mock data from mock_chat_data.json...")
         now = datetime.now(timezone.utc)
@@ -261,7 +279,7 @@ def create_or_get_direct_chat(token, user_id=None):
     Set BOT_USER_ID in .env to the Object ID of the service principal / user
     that the app authenticates as (found in Azure AD > Enterprise Applications).
     """
-    target_user_id = user_id or USER_ID
+    target_user_id = user_id or get_current_user_id(token)
     if MOCK_MODE:
         return f"mock_chat_id_{target_user_id}"
 
@@ -315,10 +333,10 @@ def create_or_get_direct_chat(token, user_id=None):
 def send_message_to_user_chat(token, chat_id, message_html):
     """
     Sends the generated HTML formatted message to the specified chat.
+    Uses the dynamic chat_id resolved from create_or_get_direct_chat().
     """
-    
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    url = f"https://graph.microsoft.com/v1.0/chats/{chat_id}/messages"
+    url = f"https://graph.microsoft.com/v1.0/chats/19:62356ee2-0fb0-4d37-a02b-f392386b90f4_9be5adb7-370d-44c9-9fc1-c3224d6a80d5@unq.gbl.spaces/messages"
     payload = {
         "body": {
             "contentType": "html",
@@ -333,7 +351,7 @@ def create_or_get_todo_list(token, list_name="Tasks from Teams", user_id=None):
     """
     Creates or retrieves a Microsoft To Do list.
     """
-    target_user_id = user_id or USER_ID
+    target_user_id = user_id or get_current_user_id(token)
     if MOCK_MODE:
         return f"mock_todo_list_id_{target_user_id}"
         
@@ -362,7 +380,7 @@ def create_todo_task(token, list_id, title, user_id=None):
     """
     Creates a new task in the specified Microsoft To Do list.
     """
-    target_user_id = user_id or USER_ID
+    target_user_id = user_id or get_current_user_id(token)
     if MOCK_MODE:
         print(f"\n--- MOCK MODE: Created To-Do Task [{title}] in list [{list_id}] for user [{target_user_id}] ---")
         return {"id": "mock_task_id_456"}
@@ -382,7 +400,7 @@ def get_todo_lists(token, user_id=None):
     """
     Fetches all Microsoft To Do lists for the user.
     """
-    target_user_id = user_id or USER_ID
+    target_user_id = user_id or get_current_user_id(token)
     if MOCK_MODE:
         return [{"id": f"mock_todo_list_id_{target_user_id}", "displayName": "Tasks from Teams"}]
         
@@ -394,7 +412,7 @@ def get_tasks_for_list(token, list_id, user_id=None):
     """
     Fetches pending (not completed) tasks from a specific Microsoft To Do list.
     """
-    target_user_id = user_id or USER_ID
+    target_user_id = user_id or get_current_user_id(token)
     if MOCK_MODE:
         return [
             {"id": "mock_task_1", "title": "Buy milk", "status": "notStarted"},
@@ -410,7 +428,7 @@ def create_or_get_onenote_notebook(token, notebook_name="Teams Recaps", user_id=
     """
     Creates or retrieves a Microsoft OneNote notebook by name.
     """
-    target_user_id = user_id or USER_ID
+    target_user_id = user_id or get_current_user_id(token)
     if MOCK_MODE:
         return f"mock_notebook_id_{target_user_id}"
         
@@ -434,7 +452,7 @@ def create_onenote_section(token, notebook_id, section_name, user_id=None):
     """
     Creates or retrieves a Microsoft OneNote section within a notebook by name.
     """
-    target_user_id = user_id or USER_ID
+    target_user_id = user_id or get_current_user_id(token)
     if MOCK_MODE:
         return f"mock_section_id_{target_user_id}"
         
@@ -458,7 +476,7 @@ def create_onenote_page(token, section_id, html_content, title="Daily Recap", us
     """
     Creates a new page in the specified Microsoft OneNote section.
     """
-    target_user_id = user_id or USER_ID
+    target_user_id = user_id or get_current_user_id(token)
     if MOCK_MODE:
         print(f"\n--- MOCK MODE: Created OneNote Page '{title}' in section [{section_id}] for user [{target_user_id}] ---")
         return {"id": "mock_page_id_345"}
