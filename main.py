@@ -58,19 +58,35 @@ class TestMessageRequest(BaseModel):
     message_html: str
 
 
-def load_previous_recap() -> str:
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r") as f:
-                data = json.load(f)
-                return data.get("previous_recap", "")
-        except json.JSONDecodeError:
-            return ""
-    return ""
+def get_state_file(user_id: str) -> str:
+    """Returns the path to the state file for a specific user."""
+    return f"recap_state_{user_id}.json"
 
-def save_current_recap(recap: str):
-    with open(STATE_FILE, "w") as f:
-        json.dump({"previous_recap": recap}, f)
+def load_previous_recap(user_id: str = None) -> dict:
+    state_file = get_state_file(user_id) if user_id else STATE_FILE
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, "r") as f:
+                data = json.load(f)
+                return {
+                    "previous_recap": data.get("previous_recap", ""),
+                    "last_recap_at": data.get("last_recap_at", None)
+                }
+        except json.JSONDecodeError:
+            return {"previous_recap": "", "last_recap_at": None}
+    return {"previous_recap": "", "last_recap_at": None}
+
+def save_current_recap(recap: str, last_recap_at: str = None, user_id: str = None):
+    state_file = get_state_file(user_id) if user_id else STATE_FILE
+    data = {"previous_recap": recap}
+    if last_recap_at:
+        data["last_recap_at"] = last_recap_at
+    else:
+        # Default to now if not provided
+        data["last_recap_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        
+    with open(state_file, "w") as f:
+        json.dump(data, f)
 
 def perform_daily_recap() -> None:
     """The core daily recap workflow (can be run in the background)."""
@@ -101,7 +117,8 @@ def perform_daily_recap() -> None:
         ]
         
         # 2. Get previous recap from state file
-        previous_recap = load_previous_recap()
+        state = load_previous_recap()
+        previous_recap = state["previous_recap"]
         
         # 3. Initialize and invoke LangGraph Agent
         graph = build_graph()
@@ -116,7 +133,7 @@ def perform_daily_recap() -> None:
         ai_extracted_tasks = result["pending_tasks"]
         
         # 4. Save state for tomorrow
-        save_current_recap(current_recap)
+        save_current_recap(current_recap, last_recap_at=end_utc.isoformat().replace("+00:00", "Z"))
         
         # 5. Add AI Extracted Tasks to Microsoft To Do
         todo_list_id = create_or_get_todo_list(token)
@@ -258,30 +275,39 @@ def send_test_message(req: TestMessageRequest):
 
 @app.post("/api/recap/generate")
 def generate_and_send_recap():
-    """Run the AI Recap generation flow AND send the results via Teams for YESTERDAY (Local Time)."""
-    try:
-        # Calculate Yesterday's range in LOCAL time
-        now_local = datetime.now().astimezone()
-        yesterday_local = now_local - timedelta(days=1)
-        
-        start_local = yesterday_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_local = yesterday_local.replace(hour=23, minute=59, second=59, microsecond=999999)
-        
-        start_utc = start_local.astimezone(timezone.utc)
-        end_utc = end_local.astimezone(timezone.utc)
+    """Run the AI Recap generation flow AND send the results via Teams for YESTERDAY (Local Time) for DEFAULT USER."""
+    return run_recap_flow_internal(None, yesterday_only=True)
 
+def run_recap_flow_internal(user_id: str = None, start_time: datetime = None, end_time: datetime = None, yesterday_only: bool = False):
+    """Internal helper to run the recap flow for any user and any time range."""
+    try:
+        # 1. Determine time range if not provided
+        if yesterday_only:
+            now_local = datetime.now().astimezone()
+            yesterday_local = now_local - timedelta(days=1)
+            start_local = yesterday_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_local = yesterday_local.replace(hour=23, minute=59, second=59, microsecond=999999)
+            start_utc = start_local.astimezone(timezone.utc)
+            end_utc = end_local.astimezone(timezone.utc)
+        else:
+            start_utc = start_time
+            end_utc = end_time or datetime.now(timezone.utc)
+
+        # 2. Fetch token and messages
         token = get_access_token()
-        messages = get_all_messages(token, start_time=start_utc, end_time=end_utc)
+        messages = get_all_messages(token, start_time=start_utc, end_time=end_utc, user_id=user_id)
         
-        # Filter out bot messages and system messages to avoid confusing the LLM
         filtered_messages = [
             m for m in messages 
             if m["sender"] not in ["Lila Jarvis", "Unknown"] 
             and "Daily Recap" not in m["content"]
         ]
         
-        previous_recap = load_previous_recap()
+        # 3. Load state
+        state = load_previous_recap(user_id)
+        previous_recap = state["previous_recap"]
         
+        # 4. Invoke Agent
         graph = build_graph()
         result = graph.invoke({
             "messages": filtered_messages,
@@ -293,56 +319,43 @@ def generate_and_send_recap():
         current_recap = result["current_recap"]
         ai_extracted_tasks = result["pending_tasks"]
         
-        # Save state for tomorrow
-        save_current_recap(current_recap)
+        # 5. Save state
+        save_current_recap(current_recap, last_recap_at=end_utc.isoformat().replace("+00:00", "Z"), user_id=user_id)
         
-        # Add AI tasks to To Do
-        todo_list_id = create_or_get_todo_list(token)
-        if ai_extracted_tasks:
-            for task_title in ai_extracted_tasks:
-                try:
-                    create_todo_task(token, todo_list_id, task_title)
-                    print(f"[{datetime.now()}] Task created in To-Do: {task_title}")
-                except Exception as task_err:
-                    print(f"[{datetime.now()}] Error creating task '{task_title}': {task_err}")
+        # 6. Integrations
+        todo_list_id = create_or_get_todo_list(token, user_id=user_id)
+        for task_title in ai_extracted_tasks:
+            try:
+                create_todo_task(token, todo_list_id, task_title, user_id=user_id)
+            except Exception: pass
         
-        # Fetch actual tasks from To-Do list
         final_pending_tasks = list(ai_extracted_tasks)
         try:
-            actual_tasks = get_tasks_for_list(token, todo_list_id)
+            actual_tasks = get_tasks_for_list(token, todo_list_id, user_id=user_id)
             fetched_tasks = [t["title"] for t in actual_tasks]
-            
-            # Merge and deduplicate
             for t in fetched_tasks:
                 if t not in final_pending_tasks:
                     final_pending_tasks.append(t)
-            print(f"[{datetime.now()}] Successfully fetched {len(fetched_tasks)} tasks from To-Do.")
-        except Exception as fetch_err:
-            print(f"[{datetime.now()}] Error fetching tasks from To-Do via endpoint: {fetch_err}")
+        except Exception: pass
 
-        # Format message for Teams Chat using HTML
         tasks_html = "".join([f"<li>{task}</li>" for task in final_pending_tasks])
-        if not tasks_html:
-            tasks_html = "<li>No pending tasks in your To-Do list.</li>"
-            
-        message_html = f"<h3>Daily Recap</h3><p>{current_recap}</p><h3>Your To-Do List</h3><ul>{tasks_html}</ul>"
+        if not tasks_html: tasks_html = "<li>No pending tasks.</li>"
+        message_html = f"<h3>Recap</h3><p>{current_recap}</p><h3>To-Do List</h3><ul>{tasks_html}</ul>"
         
-        # Get Chat ID and Send message
-        chat_id = create_or_get_direct_chat(token)
+        chat_id = create_or_get_direct_chat(token, user_id=user_id)
         send_resp = send_message_to_user_chat(token, chat_id, message_html)
                     
-        # Send Recap to OneNote
+        # OneNote
         current_date_str = datetime.now().strftime("%Y-%m-%d")
         try:
-            notebook_id = create_or_get_onenote_notebook(token, "Teams Recaps")
-            section_id = create_onenote_section(token, notebook_id, current_date_str)
-            create_onenote_page(token, section_id, message_html, title=f"Recap for {current_date_str}")
-        except Exception as onenote_err:
-            print(f"[{datetime.now()}] Error pushing to OneNote via endpoint: {onenote_err}")
+            notebook_id = create_or_get_onenote_notebook(token, "Teams Recaps", user_id=user_id)
+            section_id = create_onenote_section(token, notebook_id, current_date_str, user_id=user_id)
+            create_onenote_page(token, section_id, message_html, title=f"Recap for {current_date_str}", user_id=user_id)
+        except Exception: pass
         
         return {
             "status": "success",
-            "message": "Recap generated and sent to Teams successfully.",
+            "message": "Recap processed successfully.",
             "recap_details": {
                 "current_recap": current_recap,
                 "pending_tasks": final_pending_tasks
@@ -351,6 +364,48 @@ def generate_and_send_recap():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/recap/generate-all")
+def generate_all_recap():
+    """Run recap for all messages since the last successful recap execution for DEFAULT USER."""
+    state = load_previous_recap(None)
+    last_recap_at_str = state["last_recap_at"]
+    now_utc = datetime.now(timezone.utc)
+    if last_recap_at_str:
+        start_utc = datetime.fromisoformat(last_recap_at_str.replace("Z", "+00:00"))
+    else:
+        start_utc = now_utc - timedelta(days=1)
+    
+    return run_recap_flow_internal(None, start_time=start_utc, end_time=now_utc)
+
+@app.post("/api/recap/generate-total")
+def generate_total_recap():
+    """Run recap for ALL available messages for DEFAULT USER."""
+    return run_recap_flow_internal(None, start_time=None, end_time=None)
+
+# --- Web Endpoints (Accept user_id in payload) ---
+
+class WebRecapRequest(BaseModel):
+    user_id: str
+
+@app.post("/api/web/recap/generate")
+def web_generate_recap(req: WebRecapRequest):
+    return run_recap_flow_internal(user_id=req.user_id, yesterday_only=True)
+
+@app.post("/api/web/recap/generate-all")
+def web_generate_all_recap(req: WebRecapRequest):
+    state = load_previous_recap(req.user_id)
+    last_recap_at_str = state["last_recap_at"]
+    now_utc = datetime.now(timezone.utc)
+    if last_recap_at_str:
+        start_utc = datetime.fromisoformat(last_recap_at_str.replace("Z", "+00:00"))
+    else:
+        start_utc = now_utc - timedelta(days=1)
+    return run_recap_flow_internal(user_id=req.user_id, start_time=start_utc, end_time=now_utc)
+
+@app.post("/api/web/recap/generate-total")
+def web_generate_total_recap(req: WebRecapRequest):
+    return run_recap_flow_internal(user_id=req.user_id, start_time=None, end_time=None)
 
 
 @app.get("/")

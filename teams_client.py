@@ -74,13 +74,14 @@ def get_all_messages_for_url(url, headers):
             break
     return results
 
-def get_all_messages(token, start_time=None, end_time=None):
+def get_all_messages(token, start_time=None, end_time=None, user_id=None):
     """
     Gets all messages from the specified user's chats, teams, and channels.
     If start_time and end_time are provided (as datetime objects), filters messages accordingly.
     """
+    target_user_id = user_id or USER_ID
     if MOCK_MODE:
-        print("MOCK_MODE Enabled: Loading complex mock data from mock_chat_data.json...")
+        print(f"MOCK_MODE Enabled for user {target_user_id}: Loading complex mock data from mock_chat_data.json...")
         now = datetime.now(timezone.utc)
         
         try:
@@ -145,13 +146,13 @@ def get_all_messages(token, start_time=None, end_time=None):
             return None
 
     # 1. Get all 1-on-1 and group chats for the user
-    chats_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/chats"
+    chats_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/chats"
     chats = get_all_pages(chats_url, headers)
     
     # Extract messages for each chat
     for chat in chats:
         chat_id = chat["id"]
-        msgs_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/chats/{chat_id}/messages{filter_query}"
+        msgs_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/chats/{chat_id}/messages{filter_query}"
         
         msgs = get_all_messages_for_url(msgs_url, headers)
         for msg in msgs:
@@ -179,7 +180,7 @@ def get_all_messages(token, start_time=None, end_time=None):
                 })
 
     # 2. Get all teams the user is a member of
-    teams_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/joinedTeams"
+    teams_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/joinedTeams"
     teams = get_all_pages(teams_url, headers)
 
     for team in teams:
@@ -226,12 +227,13 @@ def get_all_messages(token, start_time=None, end_time=None):
     all_messages.sort(key=lambda x: x["time"])
     return all_messages
 
-def create_or_get_direct_chat(token):
+def create_or_get_direct_chat(token, user_id=None):
     """
     Creates a 1-on-1 chat with the user so the bot can send direct messages.
     """
+    target_user_id = user_id or USER_ID
     if MOCK_MODE:
-        return "mock_chat_id_67890"
+        return f"mock_chat_id_{target_user_id}"
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     url = "https://graph.microsoft.com/v1.0/chats"
@@ -242,7 +244,7 @@ def create_or_get_direct_chat(token):
             {
                 "@odata.type": "#microsoft.graph.aadUserConversationMember",
                 "roles": ["owner"],
-                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{USER_ID}')"
+                "user@odata.bind": f"https://graph.microsoft.com/v1.0/users('{target_user_id}')"
             }
         ]
     }
@@ -252,7 +254,7 @@ def create_or_get_direct_chat(token):
         return create_resp.json()["id"]
     elif create_resp.status_code == 400:
         # Fallback to fetching existing 1-on-1 chats
-        chats_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/chats?$filter=chatType eq 'oneOnOne'"
+        chats_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/chats?$filter=chatType eq 'oneOnOne'"
         chats_resp = requests.get(chats_url, headers=headers)
         if chats_resp.status_code == 200:
             chats = chats_resp.json().get("value", [])
@@ -268,7 +270,7 @@ def send_message_to_user_chat(token, chat_id, message_html):
     """
     
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    url = f"https://graph.microsoft.com/v1.0/chats/19:3ecfc375-9918-4b2a-a9cf-2fd366b0ec38_9be5adb7-370d-44c9-9fc1-c3224d6a80d5@unq.gbl.spaces/messages"
+    url = f"https://graph.microsoft.com/v1.0/chats/{chat_id}/messages"
     payload = {
         "body": {
             "contentType": "html",
@@ -279,17 +281,18 @@ def send_message_to_user_chat(token, chat_id, message_html):
     resp.raise_for_status()
     return resp.json()
 
-def create_or_get_todo_list(token, list_name="Tasks from Teams"):
+def create_or_get_todo_list(token, list_name="Tasks from Teams", user_id=None):
     """
     Creates or retrieves a Microsoft To Do list.
     """
+    target_user_id = user_id or USER_ID
     if MOCK_MODE:
-        return "mock_todo_list_id_123"
+        return f"mock_todo_list_id_{target_user_id}"
         
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
     # 1. Fetch existing lists to see if it already exists
-    lists_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/todo/lists"
+    lists_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/todo/lists"
     resp = requests.get(lists_url, headers=headers)
     
     if resp.status_code == 200:
@@ -307,16 +310,17 @@ def create_or_get_todo_list(token, list_name="Tasks from Teams"):
     return create_resp.json()["id"]
 
 
-def create_todo_task(token, list_id, title):
+def create_todo_task(token, list_id, title, user_id=None):
     """
     Creates a new task in the specified Microsoft To Do list.
     """
+    target_user_id = user_id or USER_ID
     if MOCK_MODE:
-        print(f"\n--- MOCK MODE: Created To-Do Task [{title}] in list [{list_id}] ---")
+        print(f"\n--- MOCK MODE: Created To-Do Task [{title}] in list [{list_id}] for user [{target_user_id}] ---")
         return {"id": "mock_task_id_456"}
         
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    tasks_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/todo/lists/{list_id}/tasks"
+    tasks_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/todo/lists/{list_id}/tasks"
     
     payload = {
         "title": title
@@ -326,21 +330,23 @@ def create_todo_task(token, list_id, title):
     resp.raise_for_status()
     return resp.json()
 
-def get_todo_lists(token):
+def get_todo_lists(token, user_id=None):
     """
     Fetches all Microsoft To Do lists for the user.
     """
+    target_user_id = user_id or USER_ID
     if MOCK_MODE:
-        return [{"id": "mock_todo_list_id_123", "displayName": "Tasks from Teams"}]
+        return [{"id": f"mock_todo_list_id_{target_user_id}", "displayName": "Tasks from Teams"}]
         
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    lists_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/todo/lists"
+    lists_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/todo/lists"
     return get_all_pages(lists_url, headers)
 
-def get_tasks_for_list(token, list_id):
+def get_tasks_for_list(token, list_id, user_id=None):
     """
     Fetches pending (not completed) tasks from a specific Microsoft To Do list.
     """
+    target_user_id = user_id or USER_ID
     if MOCK_MODE:
         return [
             {"id": "mock_task_1", "title": "Buy milk", "status": "notStarted"},
@@ -349,18 +355,19 @@ def get_tasks_for_list(token, list_id):
         
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     # Filter for non-completed tasks
-    tasks_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/todo/lists/{list_id}/tasks?$filter=status ne 'completed'"
+    tasks_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/todo/lists/{list_id}/tasks?$filter=status ne 'completed'"
     return get_all_pages(tasks_url, headers)
 
-def create_or_get_onenote_notebook(token, notebook_name="Teams Recaps"):
+def create_or_get_onenote_notebook(token, notebook_name="Teams Recaps", user_id=None):
     """
     Creates or retrieves a Microsoft OneNote notebook by name.
     """
+    target_user_id = user_id or USER_ID
     if MOCK_MODE:
-        return "mock_notebook_id_789"
+        return f"mock_notebook_id_{target_user_id}"
         
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    notebooks_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/onenote/notebooks"
+    notebooks_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/onenote/notebooks"
     
     # 1. Fetch existing notebooks
     resp = requests.get(notebooks_url, headers=headers)
@@ -375,15 +382,16 @@ def create_or_get_onenote_notebook(token, notebook_name="Teams Recaps"):
     create_resp.raise_for_status()
     return create_resp.json()["id"]
 
-def create_onenote_section(token, notebook_id, section_name):
+def create_onenote_section(token, notebook_id, section_name, user_id=None):
     """
     Creates or retrieves a Microsoft OneNote section within a notebook by name.
     """
+    target_user_id = user_id or USER_ID
     if MOCK_MODE:
-        return "mock_section_id_012"
+        return f"mock_section_id_{target_user_id}"
         
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    sections_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/onenote/notebooks/{notebook_id}/sections"
+    sections_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/onenote/notebooks/{notebook_id}/sections"
     
     # 1. Fetch existing sections
     list_resp = requests.get(sections_url, headers=headers)
@@ -398,19 +406,20 @@ def create_onenote_section(token, notebook_id, section_name):
     create_resp.raise_for_status()
     return create_resp.json()["id"]
 
-def create_onenote_page(token, section_id, html_content, title="Daily Recap"):
+def create_onenote_page(token, section_id, html_content, title="Daily Recap", user_id=None):
     """
     Creates a new page in the specified Microsoft OneNote section.
     """
+    target_user_id = user_id or USER_ID
     if MOCK_MODE:
-        print(f"\n--- MOCK MODE: Created OneNote Page '{title}' in section [{section_id}] ---")
+        print(f"\n--- MOCK MODE: Created OneNote Page '{title}' in section [{section_id}] for user [{target_user_id}] ---")
         return {"id": "mock_page_id_345"}
         
     headers = {
         "Authorization": f"Bearer {token}", 
         "Content-Type": "text/html"
     }
-    pages_url = f"https://graph.microsoft.com/v1.0/users/{USER_ID}/onenote/sections/{section_id}/pages"
+    pages_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/onenote/sections/{section_id}/pages"
     
     # OneNote requires a valid HTML document with a <title> tag to set the page name
     full_html = f"<!DOCTYPE html><html><head><title>{title}</title></head><body>{html_content}</body></html>"
