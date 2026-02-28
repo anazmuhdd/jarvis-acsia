@@ -11,7 +11,7 @@ from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from bs4 import BeautifulSoup
+# from bs4 import BeautifulSoup  # Removed to save memory
 from datetime import datetime
 from typing import List, Optional
 from dotenv import load_dotenv
@@ -54,7 +54,7 @@ ASYNC_CLIENT_OPTIONS = {
     "limits": httpx.Limits(max_connections=10, max_keepalive_connections=5),  # Limit connection pool
 }
 
-async def decode_google_news_url_async(url: str) -> str:
+async def decode_google_news_url_async(url: str, client: Optional[httpx.AsyncClient] = None) -> str:
     try:
         parsed = urlparse(url)
         path = parsed.path.split("/")
@@ -66,99 +66,105 @@ async def decode_google_news_url_async(url: str) -> str:
     except Exception:
         return url
 
+    # If no client is passed, we use a temporary one, though passing the client is preferred
+    should_close = False
+    if client is None:
+        client = httpx.AsyncClient(**ASYNC_CLIENT_OPTIONS)
+        should_close = True
+
     signature = None
     timestamp = None
     try:
-        async with httpx.AsyncClient(**ASYNC_CLIENT_OPTIONS) as tmp_client:
-            for url_fmt in [
-                f"https://news.google.com/articles/{base64_str}",
-                f"https://news.google.com/rss/articles/{base64_str}",
-            ]:
+        for url_fmt in [
+            f"https://news.google.com/articles/{base64_str}",
+            f"https://news.google.com/rss/articles/{base64_str}",
+        ]:
+            try:
+                resp = await client.get(url_fmt)
+                if resp.status_code == 200:
+                    parser = HTMLParser(resp.text)
+                    data_el = parser.css_first("c-wiz > div[jscontroller]")
+                    if data_el:
+                        signature = data_el.attributes.get("data-n-a-sg")
+                        timestamp = data_el.attributes.get("data-n-a-ts")
+                        if signature and timestamp:
+                            break
+            except Exception:
+                continue
+
+        if signature and timestamp:
+            api_url = "https://news.google.com/_/DotsSplashUi/data/batchexecute"
+            payload = [
+                "Fbv4je",
+                f'["garturlreq",[["X","X",["X","X"],null,null,1,1,"US:en",null,1,null,null,null,null,null,0,1],"X","X",1,[1,1,1],1,1,null,0,0,null,0],"{base64_str}",{timestamp},"{signature}"]',
+            ]
+            req_data = f"f.req={quote(json.dumps([[payload]]))}"
+
+            api_resp = await client.post(
+                api_url,
+                headers={"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+                data=req_data,
+            )
+
+            if api_resp.status_code == 200:
                 try:
-                    resp = await tmp_client.get(url_fmt)
-                    if resp.status_code == 200:
-                        parser = HTMLParser(resp.text)
-                        data_el = parser.css_first("c-wiz > div[jscontroller]")
-                        if data_el:
-                            signature = data_el.attributes.get("data-n-a-sg")
-                            timestamp = data_el.attributes.get("data-n-a-ts")
-                            if signature and timestamp:
-                                break
-                except Exception:
-                    continue
-
-            if signature and timestamp:
-                api_url = "https://news.google.com/_/DotsSplashUi/data/batchexecute"
-                payload = [
-                    "Fbv4je",
-                    f'["garturlreq",[["X","X",["X","X"],null,null,1,1,"US:en",null,1,null,null,null,null,null,0,1],"X","X",1,[1,1,1],1,1,null,0,0,null,0],"{base64_str}",{timestamp},"{signature}"]',
-                ]
-                req_data = f"f.req={quote(json.dumps([[payload]]))}"
-
-                api_resp = await tmp_client.post(
-                    api_url,
-                    headers={"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
-                    data=req_data,
-                )
-
-                if api_resp.status_code == 200:
-                    try:
-                        parsed_data = json.loads(api_resp.text.split("\n\n")[1])[:-2]
-                        decoded_url = json.loads(parsed_data[0][2])[1]
-                        if decoded_url and "news.google.com" not in decoded_url:
-                            return decoded_url
-                    except (json.JSONDecodeError, IndexError, TypeError):
-                        pass
+                    parsed_data = json.loads(api_resp.text.split("\n\n")[1])[:-2]
+                    decoded_url = json.loads(parsed_data[0][2])[1]
+                    if decoded_url and "news.google.com" not in decoded_url:
+                        if should_close: await client.aclose()
+                        return decoded_url
+                except (json.JSONDecodeError, IndexError, TypeError):
+                    pass
 
     except Exception:
         pass
 
     try:
-        async with httpx.AsyncClient(**ASYNC_CLIENT_OPTIONS) as tmp_client:
-            resp = await tmp_client.get(url)
-            final_url = str(resp.url)
-            if "news.google.com" not in final_url:
-                return final_url
+        resp = await client.get(url)
+        final_url = str(resp.url)
+        if "news.google.com" not in final_url:
+            if should_close: await client.aclose()
+            return final_url
     except Exception:
         pass
 
+    if should_close: await client.aclose()
     return url
 
 async def get_article_image(google_url: str, client: httpx.AsyncClient) -> dict:
     final_url = google_url
     try:
-        final_url = await decode_google_news_url_async(google_url)
+        final_url = await decode_google_news_url_async(google_url, client=client)
 
         if "news.google.com" in final_url:
             return {"url": final_url, "image": None}
 
+        # Don't download large files/images directly, just look at meta
         response = await client.get(final_url, timeout=10.0)
         final_url = str(response.url)
         
         if response.status_code != 200:
             return {"url": final_url, "image": None}
         
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # Use selectolax instead of BeautifulSoup for much lower memory usage
+        parser = HTMLParser(response.text)
         GOOGLE_DOMAINS = ["news.google.com", "gstatic.com", "googleusercontent.com"]
         result = {"url": final_url, "image": None}
 
-        og_image = soup.find("meta", attrs={"property": "og:image"})
-        if og_image and og_image.get("content"):
-            img = og_image["content"]
+        og_image = parser.css_first("meta[property='og:image']")
+        if og_image and og_image.attributes.get("content"):
+            img = og_image.attributes["content"]
             if not any(d in img for d in GOOGLE_DOMAINS):
                 result["image"] = img
-                del soup  # Free memory immediately
                 return result
         
-        twitter_image = soup.find("meta", attrs={"name": "twitter:image"})
-        if twitter_image and twitter_image.get("content"):
-            img = twitter_image["content"]
+        twitter_image = parser.css_first("meta[name='twitter:image']")
+        if twitter_image and twitter_image.attributes.get("content"):
+            img = twitter_image.attributes["content"]
             if not any(d in img for d in GOOGLE_DOMAINS):
                 result["image"] = img
-                del soup  # Free memory immediately
                 return result
             
-        del soup  # Free memory immediately
         return result
     except Exception:
         return {"url": final_url, "image": None}
@@ -170,32 +176,36 @@ async def get_news(q: str = "technology", role: Optional[str] = None):
         queries = [query.strip() for query in q.split(",") if query.strip()]
         all_articles = []
         
+        # Limit concurrent requests to prevent memory spikes
+        semaphore = asyncio.Semaphore(5)
+
         async with httpx.AsyncClient(**ASYNC_CLIENT_OPTIONS) as client:
             async def process_item(item):
-                full_title = item.find("title").text
-                title_parts = full_title.split(" - ")
-                source = title_parts.pop() if len(title_parts) > 1 else "Global News"
-                title = " - ".join(title_parts) if title_parts else full_title
-                link = item.find("link").text
-                pub_date_str = item.find("pubDate").text
-                
-                enrichment = await get_article_image(link, client)
-                final_link = enrichment["url"]
-                real_image = enrichment["image"]
-                
-                if not real_image or "news.google.com" in real_image:
-                    real_image = None
+                async with semaphore:
+                    full_title = item.find("title").text
+                    title_parts = full_title.split(" - ")
+                    source = title_parts.pop() if len(title_parts) > 1 else "Global News"
+                    title = " - ".join(title_parts) if title_parts else full_title
+                    link = item.find("link").text
+                    pub_date_str = item.find("pubDate").text
+                    
+                    enrichment = await get_article_image(link, client)
+                    final_link = enrichment["url"]
+                    real_image = enrichment["image"]
+                    
+                    if not real_image or "news.google.com" in real_image:
+                        real_image = None
 
-                description_html = item.find("description").text or ""
-                clean_description = re.sub(r'<[^>]*>', '', description_html)
-                return {
-                    "title": title,
-                    "description": clean_description[:150] + "...",
-                    "url": final_link,
-                    "urlToImage": real_image,
-                    "source": {"name": source},
-                    "publishedAt": pub_date_str
-                }
+                    description_html = item.find("description").text or ""
+                    clean_description = re.sub(r'<[^>]*>', '', description_html)
+                    return {
+                        "title": title,
+                        "description": clean_description[:150] + "...",
+                        "url": final_link,
+                        "urlToImage": real_image,
+                        "source": {"name": source},
+                        "publishedAt": pub_date_str
+                    }
 
             async def fetch_query(query):
                 rss_url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
@@ -212,11 +222,16 @@ async def get_news(q: str = "technology", role: Optional[str] = None):
                     parsed_items.append((pub_date, item))
                 
                 parsed_items.sort(key=lambda x: x[0], reverse=True)
-                top_items = [x[1] for x in parsed_items[:5]]
+                top_items = [x[1] for x in parsed_items[:3]] # Lowered from 5 to 3
                 return await asyncio.gather(*(process_item(item) for item in top_items))
 
-            results = await asyncio.gather(*(fetch_query(q) for q in queries))
-            for res in results:
+            # Serialized query fetching to keep memory low
+            all_results = []
+            for q_str in queries:
+                res = await fetch_query(q_str)
+                all_results.append(res)
+            
+            for res in all_results:
                 all_articles.extend(res)
             
             seen_urls = set()
