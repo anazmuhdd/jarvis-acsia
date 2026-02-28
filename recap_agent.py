@@ -66,6 +66,10 @@ def generate_recap_and_tasks(state: AgentState) -> dict:
                    "or obligations assigned specifically or implicitly to {user_name}. Focus on specific actions like 'analyze', 'run numbers', 'fix bug', 'send report', etc.\n"
                    "3. **Catch Reminders**: Any mention of phrases like 'remind me to', 'don't forget to', 'make sure I', or 'can you remind me' where the speaker is {user_name} MUST be added to the pending_tasks list.\n"
                    "4. **Synthesize**: Write a coherent, paragraph-style narrative for the 'recap' field summarizing the overall team's discussions and decisions.\n\n"
+                   "PERSPECTIVE - THIS IS MANDATORY:\n"
+                   "- Write the recap in **second-person perspective**, directly addressing {user_name} as 'you'.\n"
+                   "- NEVER refer to {user_name} by name or in third-person (e.g., do NOT say 'Jijimon has shared...' or 'He has...'). Instead say 'You have shared...', 'You have inquired...', 'You have been discussing...'.\n"
+                   "- Other participants in the chat (people who are NOT {user_name}) should still be referred to by their name in third-person.\n\n"
                    "TONE: Professional, concise, objective, and clear.\n\n"
                    "OUTPUT FORMAT MUST STRICTLY ADHERE TO THESE INSTRUCTIONS:\n"
                    "{format_instructions}"),
@@ -73,7 +77,7 @@ def generate_recap_and_tasks(state: AgentState) -> dict:
                  "{previous_recap}\n\n"
                  "--- CHAT MESSAGES ---\n"
                  "{messages}\n\n"
-                 "Based STIRCTLY on the provided text above, please generate the updated recap and extract the personal to-do list for {user_name}.")
+                 "Based STRICTLY on the provided text above, please generate the updated recap and extract the personal to-do list for {user_name}. Remember: write the recap addressing {user_name} as 'you' (second-person).")
     ])
     
     chain = prompt | llm | parser
