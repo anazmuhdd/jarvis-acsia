@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AuthenticatedTemplate, UnauthenticatedTemplate, useMsal } from "@azure/msal-react";
@@ -18,10 +18,14 @@ export function Dashboard() {
   const { selectedArticle, setUserId } = useAppContext();
   const { loadUserData, generateTopicsAndFetch } = useNewsData();
   const [authLoading, setAuthLoading] = useState(true);
+  const hasRun = useRef(false);
 
   useEffect(() => {
+    if (inProgress !== "none") return;
+    if (hasRun.current) return; // ← prevent re-running when state updates cause re-render
+    hasRun.current = true;
+
     const checkAuth = async () => {
-      if (inProgress !== "none") return;
       if (accounts.length > 0) {
         setAuthLoading(false);
         await loadUserData();
@@ -68,7 +72,7 @@ export function Dashboard() {
 
             {/* ── LEFT COLUMN: Profile (top) + divider + Tasks (bottom) ── */}
             <div className="flex flex-col overflow-hidden border-r border-gray-100"
-                 style={{ width: "480px", minWidth: "320px" }}>
+              style={{ width: "480px", minWidth: "320px" }}>
               {/* Profile section */}
               <div className="shrink-0 px-8 pt-7 pb-5">
                 <ProfileCard />
