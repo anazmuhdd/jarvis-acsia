@@ -106,20 +106,32 @@ def get_all_messages_for_url(url, headers):
             results.extend(messages)
             url = data.get("@odata.nextLink")
         elif resp.status_code in [401, 403]:
-            # Gracefully ignore if we lack permissions for a channel/chat
-            print(f"Skipping (Permission Denied): {url.split('?')[0]}")
+            # Print the chat/channel that's being skipped so user can see what's inaccessible
+            short_url = url.split('?')[0]
+            print(f"[Graph] SKIPPING (403 Permission Denied): {short_url}")
             break
         else:
-            print(f"Error fetching data from {url}: {resp.status_code} - {resp.text}")
+            print(f"[Graph] Error fetching {url.split('?')[0]}: {resp.status_code} - {resp.text[:200]}")
             break
     return results
 
 def get_all_messages(token, start_time=None, end_time=None, user_id=None):
     """
-    Gets all messages from the specified user's chats, teams, and channels.
+    Gets all messages from Jijimon's chats, teams, and channels.
+    User ID resolution priority:
+      1. user_id argument (if explicitly passed)
+      2. USER_ID env var (Jijimon's hardcoded Object ID)
+      3. /me fallback (if neither is set)
     If start_time and end_time are provided (as datetime objects), filters messages accordingly.
     """
-    target_user_id = user_id or get_current_user_id(token)
+    # Resolve whose chats to fetch — default is always Jijimon's ID from .env
+    if user_id:
+        target_user_id = user_id
+    elif USER_ID:
+        target_user_id = USER_ID
+    else:
+        target_user_id = get_current_user_id(token)
+
     if MOCK_MODE:
         print(f"MOCK_MODE Enabled for user {target_user_id}: Loading complex mock data from mock_chat_data.json...")
         now = datetime.now(timezone.utc)
@@ -185,16 +197,23 @@ def get_all_messages(token, start_time=None, end_time=None, user_id=None):
         except ValueError:
             return None
 
-    # 1. Get all 1-on-1 and group chats for the user
-    chats_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/chats"
+    # 1. Get ALL 1-on-1 and group chats for Jijimon
+    # $top=50 ensures we get up to 50 chats per page (Graph default is often lower)
+    chats_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/chats?$top=50"
     chats = get_all_pages(chats_url, headers)
+    print(f"[Graph] Found {len(chats)} chats for user {target_user_id}")
     
     # Extract messages for each chat
     for chat in chats:
         chat_id = chat["id"]
+        chat_type = chat.get("chatType", "unknown")
+        # Build message URL — append filter as query param (chat_id may already have params)
+        sep = "&" if filter_query and filter_query.startswith("?") else ""
         msgs_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/chats/{chat_id}/messages{filter_query}"
+        print(f"[Graph] Fetching messages from {chat_type} chat: {chat_id[:20]}...")
         
         msgs = get_all_messages_for_url(msgs_url, headers)
+        print(f"[Graph]   -> {len(msgs)} raw messages fetched")
         for msg in msgs:
             created_at_str = msg.get("createdDateTime")
             if not created_at_str:
@@ -219,7 +238,7 @@ def get_all_messages(token, start_time=None, end_time=None, user_id=None):
                     "source": "Chat"
                 })
 
-    # 2. Get all teams the user is a member of
+    # 2. Get all teams Jijimon is a member of
     teams_url = f"https://graph.microsoft.com/v1.0/users/{target_user_id}/joinedTeams"
     teams = get_all_pages(teams_url, headers)
 

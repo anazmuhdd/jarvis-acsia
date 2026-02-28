@@ -115,6 +115,8 @@ def save_web_recap_cache(user_id: str, date_str: str, recap_details: dict):
 def perform_daily_recap() -> None:
     """The core daily recap workflow (can be run in the background)."""
     print(f"[{datetime.now()}] Starting daily recap workflow...")
+    # Always run the recap for Jijimon's account
+    JIJIMON_USER_ID = os.getenv("USER_ID", "")
     try:
         # Calculate Yesterday's range in LOCAL time, then convert to UTC for API
         now_local = datetime.now().astimezone()
@@ -131,7 +133,7 @@ def perform_daily_recap() -> None:
 
         # 1. Fetch token and messages
         token = get_access_token()
-        messages = get_all_messages(token, start_time=start_utc, end_time=end_utc)
+        messages = get_all_messages(token, start_time=start_utc, end_time=end_utc, user_id=JIJIMON_USER_ID)
         
         # Filter out bot messages and system messages
         filtered_messages = [
@@ -157,14 +159,14 @@ def perform_daily_recap() -> None:
         ai_extracted_tasks = result["pending_tasks"]
         
         # 4. Save state for tomorrow
-        save_current_recap(current_recap, last_recap_at=end_utc.isoformat().replace("+00:00", "Z"))
+        save_current_recap(current_recap, last_recap_at=end_utc.isoformat().replace("+00:00", "Z"), user_id=JIJIMON_USER_ID)
         
         # 5. Add AI Extracted Tasks to Microsoft To Do
-        todo_list_id = create_or_get_todo_list(token)
+        todo_list_id = create_or_get_todo_list(token, user_id=JIJIMON_USER_ID)
         if ai_extracted_tasks:
             for task_title in ai_extracted_tasks:
                 try:
-                    create_todo_task(token, todo_list_id, task_title)
+                    create_todo_task(token, todo_list_id, task_title, user_id=JIJIMON_USER_ID)
                     print(f"[{datetime.now()}] Task created in To-Do: {task_title}")
                 except Exception as task_err:
                     print(f"[{datetime.now()}] Error creating task '{task_title}': {task_err}")
@@ -172,7 +174,7 @@ def perform_daily_recap() -> None:
         # 6. Fetch ALL pending tasks from the To-Do list to provide a fresh view
         final_pending_tasks = list(ai_extracted_tasks)
         try:
-            actual_tasks = get_tasks_for_list(token, todo_list_id)
+            actual_tasks = get_tasks_for_list(token, todo_list_id, user_id=JIJIMON_USER_ID)
             fetched_tasks = [t["title"] for t in actual_tasks]
             
             # Merge and deduplicate (preserving order of new tasks)
@@ -191,7 +193,7 @@ def perform_daily_recap() -> None:
         message_html = f"<h3>Daily Recap</h3><p>{current_recap}</p><h3>Your To-Do List</h3><ul>{tasks_html}</ul>"
         
         # 8. Get Chat ID and Send message
-        chat_id = create_or_get_direct_chat(token)
+        chat_id = create_or_get_direct_chat(token, user_id=JIJIMON_USER_ID)
         send_message_to_user_chat(token, chat_id, message_html)
         
         # 9. Send Recap to OneNote
