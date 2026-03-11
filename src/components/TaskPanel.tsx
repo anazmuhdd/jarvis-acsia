@@ -9,6 +9,7 @@ export function TaskPanel() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   const doneCount = todos.filter(t => t.done).length;
+  const pendingCount = todos.length - doneCount;
   const progressPct = todos.length > 0 ? (doneCount / todos.length) * 100 : 0;
 
   // Separate tasks into default and grouped
@@ -23,7 +24,7 @@ export function TaskPanel() {
 
   const renderTask = (todo: typeof todos[0]) => (
     <li key={todo.id}
-      className="flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-gray-50 transition-colors group">
+      className="flex items-center gap-2.5 px-2 py-2 rounded-lg hover:bg-white/60 transition-colors group">
       <div onClick={() => toggleTodo(todo.id)} className="flex items-center gap-2.5 flex-1 cursor-pointer min-w-0">
         {todo.done
           ? <CheckSquare size={14} className="text-[#34a853] shrink-0" />
@@ -40,22 +41,33 @@ export function TaskPanel() {
   );
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-blue-50/50 rounded-xl border-l-[3px] border-[#1a73e8] p-4 shadow-sm">
       {/* Title */}
       <div className="flex items-center justify-between mb-3 shrink-0">
-        <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-          <CheckSquare size={15} className="text-[#1a73e8]" /> My Tasks
+        <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
+          <CheckSquare size={18} className="text-[#1a73e8]" />
+          My Tasks
+          {/* Pulsing dot for pending tasks */}
+          {pendingCount > 0 && (
+            <span className="relative flex h-2.5 w-2.5 ml-1">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#ea4335] opacity-60" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#ea4335]" />
+            </span>
+          )}
         </h3>
-        <span className="text-xs text-gray-400">
-          {todos.length > 0 ? `${doneCount}/${todos.length}` : "empty"}
+        <span className="text-xs font-medium text-[#1a73e8] bg-[#1a73e8]/10 px-2 py-0.5 rounded-full">
+          {todos.length > 0 ? `${doneCount}/${todos.length} done` : "empty"}
         </span>
       </div>
 
       {/* Progress bar */}
       {todos.length > 0 && (
-        <div className="h-0.5 rounded-full bg-gray-100 mb-3 shrink-0 overflow-hidden">
+        <div className="h-1.5 rounded-full bg-white/80 mb-3 shrink-0 overflow-hidden shadow-inner">
           <div className="h-full rounded-full bg-[#1a73e8] transition-all duration-500"
-            style={{ width: `${progressPct}%` }} />
+            style={{
+              width: `${progressPct}%`,
+              boxShadow: "0 0 8px rgba(26,115,232,0.4)",
+            }} />
         </div>
       )}
 
@@ -66,8 +78,9 @@ export function TaskPanel() {
         value={newTodoTitle}
         onChange={e => setNewTodoTitle(e.target.value)}
         onKeyDown={handleAddTodo}
-        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-700
-                   outline-none focus:ring-1 focus:ring-[#1a73e8]/40 focus:border-[#1a73e8] mb-2 transition-all shrink-0" />
+        className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs text-gray-700
+                   outline-none focus:ring-1 focus:ring-[#1a73e8]/40 focus:border-[#1a73e8] mb-2 transition-all shrink-0
+                   shadow-sm" />
 
       {/* Task list — scrollable */}
       <div className="flex flex-col gap-0.5 overflow-y-auto flex-1 min-h-0 pr-1 pb-4">
@@ -84,7 +97,7 @@ export function TaskPanel() {
             <div key={list.id} className="mt-2">
               <button 
                 onClick={() => toggleGroup(list.id)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded-lg transition-colors group cursor-pointer"
+                className="w-full flex items-center gap-2 px-2 py-1.5 hover:bg-white/60 rounded-lg transition-colors group cursor-pointer"
               >
                 {isExpanded ? (
                   <ChevronDown size={14} className="text-gray-400" />
@@ -93,13 +106,13 @@ export function TaskPanel() {
                 )}
                 <Folder size={13} className="text-[#1a73e8] opacity-70" />
                 <span className="text-xs font-medium text-gray-600 truncate">{list.displayName}</span>
-                <span className="text-[10px] text-gray-400 ml-auto bg-gray-100 px-1.5 py-0.5 rounded-full">
+                <span className="text-[10px] text-gray-400 ml-auto bg-white/80 px-1.5 py-0.5 rounded-full">
                   {tasks.length}
                 </span>
               </button>
               
               {isExpanded && tasks.length > 0 && (
-                <ul className="flex flex-col gap-0.5 pl-6 mt-1 border-l-2 border-gray-50 ml-3">
+                <ul className="flex flex-col gap-0.5 pl-6 mt-1 border-l-2 border-[#1a73e8]/10 ml-3">
                   {tasks.map(renderTask)}
                 </ul>
               )}
@@ -114,3 +127,4 @@ export function TaskPanel() {
     </div>
   );
 }
+
